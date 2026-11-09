@@ -1,0 +1,1757 @@
+import cv2
+import os
+import csv
+import glob
+import winsound
+import numpy as np
+from datetime import datetime
+
+# Import Twilio service routing drivers
+try:
+    from twilio.rest import Client
+except ImportError:
+    Client = None
+
+try:
+    import pyttsx3
+except Exception:
+    pyttsx3 = None
+
+# ==========================================================
+# ⚠️ TWILIO CLOUD GATEWAY CONFIGURATION
+# ==========================================================
+# Get these credentials by signing up for a free sandbox at twilio.com
+TWILIO_ACCOUNT_SID = "YOUR_TWILIO_ACCOUNT_SID"
+TWILIO_AUTH_TOKEN = "YOUR_TWILIO_AUTH_TOKEN"
+TWILIO_VIRTUAL_NUMBER = "+1XXXXXXXXXX"  # Your purchased Twilio phone number
+TWILIO_WHATSAPP_NUMBER = "whatsapp:+1XXXXXXXXXX"  # Your Twilio WhatsApp number (format: whatsapp:+1234567890)
+
+def send_sms_notification(student_name, mobile_number):
+    """Dispatches real-time text alert via Twilio network rails."""
+    if not Client:
+        print("⚠️ Warning: twilio library not installed. SMS transmission skipped.")
+        return
+    
+    if not mobile_number or mobile_number.strip() in ('', 'N/A'):
+        print(f"⏩ SMS skipped for {student_name}: No structural mobile number recorded.")
+        return
+
+    # Validate configuration parameters are filled
+    if "YOUR_" in TWILIO_ACCOUNT_SID or "YOUR_" in TWILIO_AUTH_TOKEN:
+        print("⚠️ Warning: Twilio API credentials placeholder detected. Configure credentials to send SMS alerts.")
+        return
+
+    try:
+        client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+        now_str = datetime.now().strftime("%I:%M %p")
+        
+        message_body = f"Attendance Alert: Dear student, {student_name} has been marked PRESENT at {now_str}."
+        
+        # Send SMS via live REST API gateway
+        message = client.messages.create(
+            body=message_body,
+            from_=TWILIO_VIRTUAL_NUMBER,
+            to=mobile_number.strip()  # Must include country code, e.g., +919876543210
+        )
+        print(f"📱 SMS successfully queued to cellular networks for {student_name} (ID: {message.sid})")
+    except Exception as e:
+        print(f"❌ Failed to dispatch SMS network frame: {e}")
+
+
+# ==========================================================
+# STRUCTURAL PATHS & STORAGE INITIALIZATION
+# ==========================================================
+BASE_DIR = r"C:\Users\harsh"
+DB_DIR = os.path.join(BASE_DIR, "face_database")
+CSV_FILE = os.path.join(BASE_DIR, "attendance.csv")
+PROFILES_CSV = os.path.join(DB_DIR, "profiles.csv")
+PRESENT_LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "present.txt")
+LEGACY_PRESENT_LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "present.txt.txt")
+SUMMARY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lecture_summary.txt")
+ABSENT_LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "absent.txt")
+ABSENT_REASONS_FILE = os.path.join(BASE_DIR, "absent_reasons.csv")
+ACTIVE_PROJECT_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "active_project.txt")
+PROJECTS_CSV = os.path.join(os.path.dirname(os.path.abspath(__file__)), "projects.csv")
+PROJECT_ATTENDANCE_CSV = os.path.join(BASE_DIR, "project_attendance.csv")
+
+# Create directories and file templates if they do not exist
+if not os.path.exists(DB_DIR):
+    os.makedirs(DB_DIR)
+
+if not os.path.exists(CSV_FILE):
+    with open(CSV_FILE, mode='w', newline='') as file:
+        writer = csv.writer(file)
+        writer.writerow(["Name", "Roll", "Date", "Time", "Status"])
+
+for log_file in (PRESENT_LOG_FILE, LEGACY_PRESENT_LOG_FILE):
+    if not os.path.exists(log_file):
+        with open(log_file, 'w', encoding='utf-8') as text_file:
+            text_file.write("")
+
+if not os.path.exists(ABSENT_LOG_FILE):
+    with open(ABSENT_LOG_FILE, 'w', encoding='utf-8') as text_file:
+        text_file.write("")
+
+# ✨ CRITICAL UPDATE: Structural tracking map now includes "Mobile" key data
+if not os.path.exists(PROFILES_CSV):
+    with open(PROFILES_CSV, mode='w', newline='') as pf:
+        pw = csv.writer(pf)
+        pw.writerow(["Name", "Roll", "Mobile", "File"])
+
+if not os.path.exists(ABSENT_REASONS_FILE):
+    with open(ABSENT_REASONS_FILE, mode='w', newline='') as rf:
+        rw = csv.writer(rf)
+        rw.writerow(["Name", "Roll", "Date", "Reason", "Recorded_Time"])
+
+# Initialize Active Project files
+if not os.path.exists(PROJECTS_CSV):
+    with open(PROJECTS_CSV, mode='w', newline='') as pf:
+        pw = csv.writer(pf)
+        pw.writerow(["Project_ID", "Project_Name", "Subject", "Start_Date", "Start_Time", "End_Date", "End_Time", "Status", "Description"])
+
+if not os.path.exists(PROJECT_ATTENDANCE_CSV):
+    with open(PROJECT_ATTENDANCE_CSV, mode='w', newline='') as pa:
+        pw = csv.writer(pa)
+        pw.writerow(["Project_ID", "Name", "Roll", "Date", "Time", "Status"])
+
+# Load built-in face cascades
+face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+
+speaker = None
+if pyttsx3 is not None:
+    try:
+        speaker = pyttsx3.init()
+        speaker.setProperty('rate', 170)
+    except Exception:
+        speaker = None
+
+
+# ==========================================================
+# ACTIVE PROJECT MANAGEMENT SYSTEM
+# ==========================================================
+def get_active_project():
+    """Get the currently active project."""
+    if not os.path.exists(ACTIVE_PROJECT_FILE):
+        return None
+    try:
+        with open(ACTIVE_PROJECT_FILE, 'r', encoding='utf-8') as f:
+            project_id = f.read().strip()
+            if project_id:
+                return project_id
+    except:
+        pass
+    return None
+
+
+def set_active_project(project_id):
+    """Set the active project."""
+    try:
+        with open(ACTIVE_PROJECT_FILE, 'w', encoding='utf-8') as f:
+            f.write(project_id)
+        return True
+    except Exception as ex:
+        print(f"❌ Error setting active project: {ex}")
+        return False
+
+
+def clear_active_project():
+    """Clear the active project."""
+    try:
+        if os.path.exists(ACTIVE_PROJECT_FILE):
+            os.remove(ACTIVE_PROJECT_FILE)
+        return True
+    except Exception as ex:
+        print(f"❌ Error clearing active project: {ex}")
+        return False
+
+
+def create_new_project():
+    """Create a new project/lecture."""
+    print("\n" + "="*60)
+    print("🆕 CREATE NEW PROJECT")
+    print("="*60)
+    
+    project_name = input("📝 Enter project/lecture name: ").strip()
+    if not project_name:
+        print("❌ Project name cannot be empty.")
+        return None
+    
+    subject = input("📚 Enter subject (optional): ").strip()
+    description = input("📖 Enter description (optional): ").strip()
+    
+    # Generate Project ID
+    now = datetime.now()
+    project_id = f"PROJ_{now.strftime('%Y%m%d_%H%M%S')}"
+    start_date = now.strftime("%Y-%m-%d")
+    start_time = now.strftime("%H:%M:%S")
+    
+    try:
+        with open(PROJECTS_CSV, mode='a', newline='') as pf:
+            writer = csv.writer(pf)
+            writer.writerow([project_id, project_name, subject, start_date, start_time, "", "", "ACTIVE", description])
+        
+        print(f"\n✅ Project created successfully!")
+        print(f"   Project ID: {project_id}")
+        print(f"   Name: {project_name}")
+        print(f"   Subject: {subject or 'N/A'}")
+        
+        # Ask if they want to activate this project
+        activate = input("\n🔄 Activate this project now? (yes/no): ").strip().lower()
+        if activate == 'yes':
+            if set_active_project(project_id):
+                print(f"✅ Project {project_id} is now ACTIVE!")
+                return project_id
+        
+        return project_id
+    except Exception as ex:
+        print(f"❌ Error creating project: {ex}")
+        return None
+
+
+def list_all_projects():
+    """List all projects."""
+    print("\n" + "="*60)
+    print("📋 ALL PROJECTS")
+    print("="*60)
+    
+    if not os.path.exists(PROJECTS_CSV):
+        print("❌ No projects found.")
+        return
+    
+    try:
+        with open(PROJECTS_CSV, mode='r', newline='') as pf:
+            reader = csv.DictReader(pf)
+            projects = list(reader)
+    except Exception as ex:
+        print(f"❌ Error reading projects: {ex}")
+        return
+    
+    if len(projects) <= 0:
+        print("❌ No projects found.")
+        return
+    
+    active_proj = get_active_project()
+    
+    print(f"\n📊 Total Projects: {len(projects)}\n")
+    print(f"{'ID':<25} {'Name':<25} {'Subject':<20} {'Status':<10}")
+    print("-" * 80)
+    
+    for proj in projects:
+        proj_id = proj.get('Project_ID', 'N/A')[:25]
+        name = proj.get('Project_Name', 'N/A')[:25]
+        subject = proj.get('Subject', 'N/A')[:20]
+        status = proj.get('Status', 'N/A')
+        
+        # Mark active project
+        if proj_id.strip() == active_proj:
+            status = "🟢 ACTIVE"
+        
+        print(f"{proj_id:<25} {name:<25} {subject:<20} {status:<10}")
+
+
+def activate_project():
+    """Activate an existing project."""
+    print("\n" + "="*60)
+    print("🔄 ACTIVATE PROJECT")
+    print("="*60)
+    
+    if not os.path.exists(PROJECTS_CSV):
+        print("❌ No projects found.")
+        return
+    
+    try:
+        with open(PROJECTS_CSV, mode='r', newline='') as pf:
+            reader = csv.DictReader(pf)
+            projects = list(reader)
+    except Exception as ex:
+        print(f"❌ Error reading projects: {ex}")
+        return
+    
+    if len(projects) <= 0:
+        print("❌ No projects found.")
+        return
+    
+    # Display projects
+    print("\n📋 Available Projects:\n")
+    for idx, proj in enumerate(projects, 1):
+        proj_id = proj.get('Project_ID', 'N/A')
+        name = proj.get('Project_Name', 'N/A')
+        status = proj.get('Status', 'N/A')
+        print(f"{idx}. {name} ({proj_id}) - Status: {status}")
+    
+    try:
+        choice = input(f"\n📌 Enter project number (1-{len(projects)}) to activate: ").strip()
+        idx = int(choice) - 1
+        
+        if idx < 0 or idx >= len(projects):
+            print("❌ Invalid selection.")
+            return
+        
+        selected_proj = projects[idx]
+        project_id = selected_proj.get('Project_ID')
+        project_name = selected_proj.get('Project_Name')
+        
+        if set_active_project(project_id):
+            print(f"\n✅ Project '{project_name}' is now ACTIVE!")
+            print(f"   Project ID: {project_id}")
+    except ValueError:
+        print("❌ Invalid input.")
+    except Exception as ex:
+        print(f"❌ Error: {ex}")
+
+
+def end_active_project():
+    """End the currently active project."""
+    print("\n" + "="*60)
+    print("🛑 END ACTIVE PROJECT")
+    print("="*60)
+    
+    active_proj = get_active_project()
+    if not active_proj:
+        print("❌ No active project found.")
+        return
+    
+    # Find and update the project
+    try:
+        with open(PROJECTS_CSV, mode='r', newline='') as pf:
+            reader = csv.DictReader(pf)
+            projects = list(reader)
+    except Exception as ex:
+        print(f"❌ Error reading projects: {ex}")
+        return
+    
+    # Find the active project and update it
+    now = datetime.now()
+    end_date = now.strftime("%Y-%m-%d")
+    end_time = now.strftime("%H:%M:%S")
+    
+    found = False
+    for proj in projects:
+        if proj.get('Project_ID') == active_proj:
+            proj['End_Date'] = end_date
+            proj['End_Time'] = end_time
+            proj['Status'] = 'COMPLETED'
+            found = True
+            break
+    
+    if not found:
+        print("❌ Active project not found in records.")
+        return
+    
+    # Write back updated projects
+    try:
+        with open(PROJECTS_CSV, mode='w', newline='') as pf:
+            fieldnames = ['Project_ID', 'Project_Name', 'Subject', 'Start_Date', 'Start_Time', 'End_Date', 'End_Time', 'Status', 'Description']
+            writer = csv.DictWriter(pf, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(projects)
+        
+        print(f"✅ Project {active_proj} ended successfully!")
+        print(f"   End Date: {end_date}")
+        print(f"   End Time: {end_time}")
+        
+        # Clear active project
+        clear_active_project()
+        print("✅ Active project cleared.")
+    except Exception as ex:
+        print(f"❌ Error ending project: {ex}")
+
+
+def show_active_project_info():
+    """Show information about the active project."""
+    print("\n" + "="*60)
+    print("ℹ️  ACTIVE PROJECT INFORMATION")
+    print("="*60)
+    
+    active_proj = get_active_project()
+    if not active_proj:
+        print("❌ No active project found.")
+        return
+    
+    try:
+        with open(PROJECTS_CSV, mode='r', newline='') as pf:
+            reader = csv.DictReader(pf)
+            for proj in reader:
+                if proj.get('Project_ID') == active_proj:
+                    print(f"\n✅ ACTIVE PROJECT FOUND!\n")
+                    print(f"📌 Project ID: {proj.get('Project_ID', 'N/A')}")
+                    print(f"📝 Name: {proj.get('Project_Name', 'N/A')}")
+                    print(f"📚 Subject: {proj.get('Subject', 'N/A')}")
+                    print(f"🗓️  Start Date: {proj.get('Start_Date', 'N/A')}")
+                    print(f"⏰ Start Time: {proj.get('Start_Time', 'N/A')}")
+                    print(f"📖 Description: {proj.get('Description', 'N/A')}")
+                    print(f"📊 Status: {proj.get('Status', 'N/A')}")
+                    return
+    except Exception as ex:
+        print(f"❌ Error reading projects: {ex}")
+
+
+def project_management_menu():
+    """Main project management menu."""
+    while True:
+        print("\n" + "="*60)
+        print("🎯 PROJECT MANAGEMENT SYSTEM")
+        print("="*60)
+        print("1️⃣  Create new project")
+        print("2️⃣  List all projects")
+        print("3️⃣  Activate a project")
+        print("4️⃣  Show active project info")
+        print("5️⃣  End active project")
+        print("6️⃣  Back to main menu")
+        print("="*60)
+        
+        choice = input("Enter option (1-6): ").strip()
+        
+        if choice == '1':
+            create_new_project()
+        elif choice == '2':
+            list_all_projects()
+        elif choice == '3':
+            activate_project()
+        elif choice == '4':
+            show_active_project_info()
+        elif choice == '5':
+            end_active_project()
+        elif choice == '6':
+            break
+        else:
+            print("❌ Invalid option. Try again.")
+
+
+def play_presence_sound():
+    try:
+        winsound.Beep(880, 180)
+        winsound.Beep(1046, 180)
+        winsound.Beep(1175, 220)
+    except Exception:
+        pass
+
+
+def speak_text(message):
+    if speaker is not None:
+        try:
+            speaker.say(message)
+            speaker.runAndWait()
+            return
+        except Exception:
+            pass
+
+    play_presence_sound()
+
+
+# ✨ UPDATED FOR SMS PROPAGATION ROUTINES
+def save_present_log(name, roll='', mobile=''):
+    now = datetime.now()
+    date_text = now.strftime("%Y-%m-%d")
+    time_text = now.strftime("%H:%M:%S")
+    roll_text = (roll or '').strip() or 'N/A'
+    mobile_text = (mobile or '').strip() or 'N/A'
+    
+    record = f"Name: {name} | Roll: {roll_text} | Mobile: {mobile_text} | Date: {date_text} | Time: {time_text}\n"
+
+    with open(CSV_FILE, mode='a', newline='') as file:
+        writer = csv.writer(file)
+        writer.writerow([name, roll_text, date_text, time_text, "PRESENT"])
+
+    for log_file in (PRESENT_LOG_FILE, LEGACY_PRESENT_LOG_FILE):
+        with open(log_file, 'a', encoding='utf-8') as text_file:
+            text_file.write(record)
+
+    update_lecture_summary()
+    print(f"💾 Saved entry to local storage systems: {name} ({roll_text}) logged PRESENT.")
+    
+    # Trigger SMS dispatch routines out-of-band asynchronously
+    send_sms_notification(name, mobile_text)
+
+
+def update_lecture_summary():
+    if not os.path.exists(CSV_FILE):
+        return
+    try:
+        with open(CSV_FILE, mode='r', newline='') as file:
+            rows = list(csv.DictReader(file))
+    except Exception:
+        return
+    if not rows:
+        return
+
+    date_totals = {}
+    for row in rows:
+        name = (row.get('Name') or '').strip()
+        date_value = (row.get('Date') or '').strip()
+        if not name or not date_value:
+            continue
+        date_totals.setdefault(date_value, set()).add(name)
+
+    summary_lines = []
+    total_students = len(load_known_faces()) if os.path.exists(PROFILES_CSV) else 0
+
+    for date_value in sorted(date_totals):
+        present_count = len(date_totals[date_value])
+        average = 0.0
+        if total_students > 0:
+            average = (present_count / total_students) * 100
+        summary_lines.append(
+            f"Date: {date_value} | Students Present: {present_count} | Average Present: {average:.2f}%\n"
+        )
+
+    with open(SUMMARY_FILE, 'w', encoding='utf-8') as summary_file:
+        if summary_lines:
+            summary_file.writelines(summary_lines)
+        else:
+            summary_file.write("No attendance data available yet.\n")
+    print("📊 Lecture-wise average attendance updated in lecture_summary.txt")
+
+
+# ✨ UPDATED TO INJECT MOBILE ROUTING METADATA
+def load_known_faces():
+    profiles = {}
+    if os.path.exists(PROFILES_CSV):
+        with open(PROFILES_CSV, mode='r', newline='') as pf:
+            reader = csv.DictReader(pf)
+            for row in reader:
+                fname = row.get('File')
+                name = (row.get('Name') or '').upper()
+                roll = (row.get('Roll') or '').upper()
+                mobile = (row.get('Mobile') or '').upper()
+                if not fname:
+                    continue
+                img_path = os.path.join(DB_DIR, fname) if not os.path.isabs(fname) else fname
+                if not os.path.exists(img_path):
+                    continue
+                gray_img = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
+                if gray_img is None:
+                    continue
+                faces = face_cascade.detectMultiScale(gray_img, 1.3, 5)
+                for (x, y, w, h) in faces:
+                    # Append mobile parameters dynamically into memory structures
+                    profiles[name] = (gray_img[y:y+h, x:x+w], roll, mobile)
+                    break
+    else:
+        image_files = glob.glob(os.path.join(DB_DIR, "*.jpg"))
+        for img_path in image_files:
+            name = os.path.splitext(os.path.basename(img_path))[0].upper()
+            gray_img = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
+            faces = face_cascade.detectMultiScale(gray_img, 1.3, 5)
+            for (x, y, w, h) in faces:
+                profiles[name] = (gray_img[y:y+h, x:x+w], '', '')
+                break
+    return profiles
+
+
+# ✨ UPDATED TO PROMPT USER FOR MOBILE NUMBERS ON CAPTURE
+def manual_capture():
+    cap = cv2.VideoCapture(0)
+    if not cap.isOpened():
+        print("❌ Cannot open camera for manual capture.")
+        return False
+
+    window_name = 'Manual Capture - Press SPACE to capture (or Q to cancel)'
+    print('\n📸 Manual capture: Press SPACE to take photo, Q to cancel')
+    captured = None
+    while True:
+        ret, frame_cap = cap.read()
+        if not ret:
+            break
+        cv2.imshow(window_name, frame_cap)
+        k = cv2.waitKey(1) & 0xFF
+        if k == ord(' '):
+            captured = frame_cap.copy()
+            break
+        elif k == ord('q') or k == ord('Q'):
+            break
+
+    cap.release()
+    cv2.destroyWindow(window_name)
+
+    if captured is None:
+        print('❌ Manual capture canceled or failed.')
+        return False
+
+    new_name = input('✍️ Enter the name/details for this photo: ').strip().upper()
+    new_roll = input('🔢 Enter roll number (optional): ').strip().upper()
+    new_mobile = input('📱 Enter mobile number (with country code, e.g., +9198765...): ').strip()
+    
+    if not new_name:
+        print('❌ Name empty. Photo not saved.')
+        return False
+
+    filename = os.path.join(DB_DIR, f"{new_name}.jpg")
+    cv2.imwrite(filename, captured)
+    try:
+        with open(PROFILES_CSV, mode='a', newline='') as pf:
+            pw = csv.writer(pf)
+            pw.writerow([new_name, new_roll, new_mobile, os.path.basename(filename)])
+    except Exception as ex:
+        print(f"⚠️ Warning: failed to write profile metadata: {ex}")
+    print(f'💾 Saved manual capture to {filename}')
+    return True
+
+
+def update_phone_number():
+    """Add or update phone number for an existing profile."""
+    print("\n" + "="*60)
+    print("📱 UPDATE PHONE NUMBER FOR EXISTING PROFILE")
+    print("="*60)
+    
+    if not os.path.exists(PROFILES_CSV):
+        print("❌ No profiles found. Please enroll a student first.")
+        return
+    
+    # Load all profiles
+    profiles_list = []
+    try:
+        with open(PROFILES_CSV, mode='r', newline='') as pf:
+            reader = csv.DictReader(pf)
+            profiles_list = list(reader)
+    except Exception as ex:
+        print(f"❌ Error reading profiles: {ex}")
+        return
+    
+    if not profiles_list:
+        print("❌ No profiles found. Please enroll a student first.")
+        return
+    
+    # Display all profiles
+    print("\n🔍 Available Profiles:")
+    for idx, profile in enumerate(profiles_list, 1):
+        name = profile.get('Name', 'N/A')
+        roll = profile.get('Roll', 'N/A')
+        mobile = profile.get('Mobile', 'N/A')
+        print(f"   {idx}. {name} | Roll: {roll} | Mobile: {mobile}")
+    
+    try:
+        choice = input(f"\n📌 Enter profile number (1-{len(profiles_list)}) to update: ").strip()
+        idx = int(choice) - 1
+        
+        if idx < 0 or idx >= len(profiles_list):
+            print("❌ Invalid selection.")
+            return
+        
+        selected_profile = profiles_list[idx]
+        name = selected_profile.get('Name', '').upper()
+        
+        print(f"\n✏️ Updating phone number for: {name}")
+        new_mobile = input("📱 Enter new mobile number (with country code, e.g., +919876543210): ").strip()
+        
+        if not new_mobile:
+            print("⏭️ Phone number not updated (empty input).")
+            return
+        
+        # Update the profile
+        selected_profile['Mobile'] = new_mobile
+        
+        # Write back to CSV
+        try:
+            with open(PROFILES_CSV, mode='w', newline='') as pf:
+                fieldnames = ['Name', 'Roll', 'Mobile', 'File']
+                writer = csv.DictWriter(pf, fieldnames=fieldnames)
+                writer.writeheader()
+                writer.writerows(profiles_list)
+            print(f"✅ Phone number updated successfully for {name}: {new_mobile}")
+        except Exception as ex:
+            print(f"❌ Error writing to profiles: {ex}")
+            
+    except ValueError:
+        print("❌ Invalid input. Please enter a number.")
+    except Exception as ex:
+        print(f"❌ Error: {ex}")
+
+
+# ========================================
+# MESSAGE SYSTEM FUNCTIONS
+# ========================================
+MESSAGE_LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "message_log.txt")
+
+def log_message(recipient, message_text, status):
+    """Log all messages sent to a file."""
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    log_entry = f"[{timestamp}] To: {recipient} | Status: {status} | Message: {message_text}\n"
+    try:
+        with open(MESSAGE_LOG_FILE, 'a', encoding='utf-8') as log_file:
+            log_file.write(log_entry)
+    except Exception as ex:
+        print(f"⚠️ Warning: Could not log message: {ex}")
+
+
+def send_sms_message(student_name, mobile_number, message_text):
+    """Send a custom SMS message to a student."""
+    if not Client:
+        print("⚠️ Warning: twilio library not installed. Message not sent.")
+        log_message(student_name, message_text, "SMS FAILED - No Twilio")
+        return False
+    
+    if not mobile_number or mobile_number.strip() in ('', 'N/A'):
+        print(f"⏩ Message not sent for {student_name}: No phone number recorded.")
+        log_message(student_name, message_text, "SMS FAILED - No Phone")
+        return False
+
+    if "YOUR_" in TWILIO_ACCOUNT_SID or "YOUR_" in TWILIO_AUTH_TOKEN:
+        print("⚠️ Warning: Twilio credentials not configured. Message not sent.")
+        log_message(student_name, message_text, "SMS FAILED - No Config")
+        return False
+
+    try:
+        client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+        message = client.messages.create(
+            body=message_text,
+            from_=TWILIO_VIRTUAL_NUMBER,
+            to=mobile_number.strip()
+        )
+        print(f"✅ SMS sent to {student_name} (ID: {message.sid})")
+        log_message(student_name, message_text, "SMS SENT")
+        return True
+    except Exception as e:
+        print(f"❌ Failed to send SMS to {student_name}: {e}")
+        log_message(student_name, message_text, f"SMS FAILED - {str(e)[:30]}")
+        return False
+
+
+def send_whatsapp_message(student_name, mobile_number, message_text):
+    """Send a WhatsApp message to a student via Twilio."""
+    if not Client:
+        print("⚠️ Warning: twilio library not installed. WhatsApp message not sent.")
+        log_message(student_name, message_text, "WHATSAPP FAILED - No Twilio")
+        return False
+    
+    if not mobile_number or mobile_number.strip() in ('', 'N/A'):
+        print(f"⏩ WhatsApp message not sent for {student_name}: No phone number recorded.")
+        log_message(student_name, message_text, "WHATSAPP FAILED - No Phone")
+        return False
+
+    if "YOUR_" in TWILIO_ACCOUNT_SID or "YOUR_" in TWILIO_AUTH_TOKEN or "YOUR_" in TWILIO_WHATSAPP_NUMBER:
+        print("⚠️ Warning: Twilio WhatsApp credentials not configured. Message not sent.")
+        log_message(student_name, message_text, "WHATSAPP FAILED - No Config")
+        return False
+
+    try:
+        client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+        # Format phone number for WhatsApp
+        whatsapp_recipient = f"whatsapp:{mobile_number.strip()}"
+        
+        message = client.messages.create(
+            body=message_text,
+            from_=TWILIO_WHATSAPP_NUMBER,
+            to=whatsapp_recipient
+        )
+        print(f"✅ WhatsApp message sent to {student_name} (ID: {message.sid})")
+        log_message(student_name, message_text, "WHATSAPP SENT")
+        return True
+    except Exception as e:
+        print(f"❌ Failed to send WhatsApp message to {student_name}: {e}")
+        log_message(student_name, message_text, f"WHATSAPP FAILED - {str(e)[:30]}")
+        return False
+
+
+def send_message_to_student():
+    """Send a custom message to a specific student."""
+    print("\n" + "="*60)
+    print("💬 SEND MESSAGE TO STUDENT")
+    print("="*60)
+    
+    if not os.path.exists(PROFILES_CSV):
+        print("❌ No profiles found.")
+        return
+    
+    # Load all profiles
+    profiles_list = []
+    try:
+        with open(PROFILES_CSV, mode='r', newline='') as pf:
+            reader = csv.DictReader(pf)
+            profiles_list = list(reader)
+    except Exception as ex:
+        print(f"❌ Error reading profiles: {ex}")
+        return
+    
+    if not profiles_list:
+        print("❌ No profiles found.")
+        return
+    
+    # Display all profiles
+    print("\n🔍 Available Students:")
+    for idx, profile in enumerate(profiles_list, 1):
+        name = profile.get('Name', 'N/A')
+        roll = profile.get('Roll', 'N/A')
+        mobile = profile.get('Mobile', 'N/A') or 'No Phone'
+        print(f"   {idx}. {name} ({roll}) - {mobile}")
+    
+    try:
+        choice = input(f"\n📌 Enter student number (1-{len(profiles_list)}) to message: ").strip()
+        idx = int(choice) - 1
+        
+        if idx < 0 or idx >= len(profiles_list):
+            print("❌ Invalid selection.")
+            return
+        
+        selected = profiles_list[idx]
+        name = selected.get('Name', '').upper()
+        mobile = selected.get('Mobile', '')
+        
+        print(f"\n✏️ Message to: {name}")
+        message_text = input("📝 Enter message (max 160 characters recommended): ").strip()
+        
+        if not message_text:
+            print("⏭️ Message not sent (empty).")
+            return
+        
+        send_sms_message(name, mobile, message_text)
+        
+    except ValueError:
+        print("❌ Invalid input.")
+    except Exception as ex:
+        print(f"❌ Error: {ex}")
+
+
+def send_broadcast_message():
+    """Send a message to all enrolled students."""
+    print("\n" + "="*60)
+    print("📢 BROADCAST MESSAGE TO ALL STUDENTS")
+    print("="*60)
+    
+    if not os.path.exists(PROFILES_CSV):
+        print("❌ No profiles found.")
+        return
+    
+    # Load all profiles
+    profiles_list = []
+    try:
+        with open(PROFILES_CSV, mode='r', newline='') as pf:
+            reader = csv.DictReader(pf)
+            profiles_list = list(reader)
+    except Exception as ex:
+        print(f"❌ Error reading profiles: {ex}")
+        return
+    
+    if not profiles_list:
+        print("❌ No profiles found.")
+        return
+    
+    print(f"\n📋 Total students: {len(profiles_list)}")
+    for idx, profile in enumerate(profiles_list, 1):
+        name = profile.get('Name', 'N/A')
+        mobile = profile.get('Mobile', '') or 'No Phone'
+        print(f"   {idx}. {name} - {mobile}")
+    
+    confirm = input("\n⚠️ Send message to ALL students? (yes/no): ").strip().lower()
+    if confirm != 'yes':
+        print("❌ Broadcast canceled.")
+        return
+    
+    message_text = input("\n📝 Enter message (max 160 characters recommended): ").strip()
+    if not message_text:
+        print("⏭️ Broadcast not sent (empty message).")
+        return
+    
+    print("\n📤 Sending broadcast messages...")
+    success_count = 0
+    failed_count = 0
+    
+    for profile in profiles_list:
+        name = profile.get('Name', '').upper()
+        mobile = profile.get('Mobile', '')
+        if send_sms_message(name, mobile, message_text):
+            success_count += 1
+        else:
+            failed_count += 1
+    
+    print(f"\n✅ Broadcast complete: {success_count} sent, {failed_count} failed")
+
+
+def send_message_to_present_students():
+    """Send a personalized message to all students marked present with their details and thank you."""
+    print("\n" + "="*60)
+    print("📢 SEND MESSAGE TO ALL PRESENT STUDENTS")
+    print("="*60)
+    
+    # Check if we have attendance records
+    if not os.path.exists(CSV_FILE):
+        print("❌ No attendance records found.")
+        return
+    
+    if not os.path.exists(PROFILES_CSV):
+        print("❌ No student profiles found.")
+        return
+    
+    # Load profiles to get mobile numbers
+    profiles_dict = {}
+    try:
+        with open(PROFILES_CSV, mode='r', newline='') as pf:
+            reader = csv.DictReader(pf)
+            for row in reader:
+                name = row.get('Name', '').upper().strip()
+                roll = row.get('Roll', '').strip()
+                mobile = row.get('Mobile', '').strip()
+                profiles_dict[name] = {'roll': roll, 'mobile': mobile}
+    except Exception as ex:
+        print(f"❌ Error reading profiles: {ex}")
+        return
+    
+    # Read attendance records to find who was present
+    present_students = {}
+    try:
+        with open(CSV_FILE, mode='r', newline='') as file:
+            reader = csv.DictReader(file)
+            for row in reader:
+                name = row.get('Name', '').upper().strip()
+                roll = row.get('Roll', '').strip()
+                date_val = row.get('Date', '').strip()
+                time_val = row.get('Time', '').strip()
+                status = row.get('Status', '').strip()
+                
+                if status == 'PRESENT' and name:
+                    # Keep the latest entry for each student
+                    present_students[name] = {
+                        'roll': roll,
+                        'date': date_val,
+                        'time': time_val
+                    }
+    except Exception as ex:
+        print(f"❌ Error reading attendance: {ex}")
+        return
+    
+    if not present_students:
+        print("❌ No students marked present yet.")
+        return
+    
+    print(f"\n📋 Total present students: {len(present_students)}")
+    for name, details in present_students.items():
+        roll = details['roll'] or 'N/A'
+        print(f"   • {name} (Roll: {roll})")
+    
+    confirm = input("\n⚠️ Send message to ALL present students? (yes/no): ").strip().lower()
+    if confirm != 'yes':
+        print("❌ Message sending canceled.")
+        return
+    
+    print(f"\n📝 Customize message format:")
+    print("1️⃣  Include name + date/time + thank you")
+    print("2️⃣  Include name + roll number + thank you")
+    print("3️⃣  Include name + roll number + date/time + thank you")
+    
+    format_choice = input("Enter format choice (1-3): ").strip()
+    
+    print("\n📤 Sending personalized messages to all present students...")
+    success_count = 0
+    failed_count = 0
+    
+    for name, details in present_students.items():
+        # Get mobile number from profiles
+        mobile = ''
+        if name in profiles_dict:
+            mobile = profiles_dict[name]['mobile']
+        
+        if not mobile:
+            print(f"⏩ Skipped {name}: No phone number on file.")
+            failed_count += 1
+            continue
+        
+        # Construct personalized message
+        roll = details['roll'] or 'N/A'
+        date_val = details['date'] or 'N/A'
+        time_val = details['time'] or 'N/A'
+        
+        if format_choice == '1':
+            message_text = f"Dear {name}, you have been marked PRESENT on {date_val} at {time_val}. Thank you!"
+        elif format_choice == '2':
+            message_text = f"Dear {name} (Roll: {roll}), you have been marked PRESENT. Thank you!"
+        elif format_choice == '3':
+            message_text = f"Dear {name} (Roll: {roll}), you have been marked PRESENT on {date_val} at {time_val}. Thank you!"
+        else:
+            message_text = f"Dear {name}, you have been marked PRESENT. Thank you!"
+        
+        if send_sms_message(name, mobile, message_text):
+            success_count += 1
+        else:
+            failed_count += 1
+    
+    print(f"\n✅ Message sending complete: {success_count} sent, {failed_count} failed")
+
+
+def save_absent_record(name, roll='', mobile='', date_val=''):
+    """Save absent student record."""
+    now = datetime.now()
+    if not date_val:
+        date_text = now.strftime("%Y-%m-%d")
+    else:
+        date_text = date_val
+    
+    time_text = now.strftime("%H:%M:%S")
+    roll_text = (roll or '').strip() or 'N/A'
+    mobile_text = (mobile or '').strip() or 'N/A'
+    
+    record = f"Name: {name} | Roll: {roll_text} | Mobile: {mobile_text} | Date: {date_text} | Time: {time_text}\n"
+    
+    try:
+        with open(ABSENT_LOG_FILE, 'a', encoding='utf-8') as text_file:
+            text_file.write(record)
+    except Exception as ex:
+        print(f"⚠️ Warning: Could not save absent record: {ex}")
+
+
+def save_absent_reason(name, roll, date_val, reason):
+    """Save the reason for absence."""
+    now = datetime.now()
+    recorded_time = now.strftime("%Y-%m-%d %H:%M:%S")
+    
+    try:
+        with open(ABSENT_REASONS_FILE, mode='a', newline='') as rf:
+            writer = csv.writer(rf)
+            writer.writerow([name, roll, date_val, reason, recorded_time])
+        print(f"✅ Absence reason saved for {name}")
+    except Exception as ex:
+        print(f"❌ Error saving absence reason: {ex}")
+
+
+def send_message_to_absent_students():
+    """Send message to absent students asking for reason why they're absent."""
+    print("\n" + "="*60)
+    print("📢 MESSAGE TO ABSENT STUDENTS - ASK FOR REASON")
+    print("="*60)
+    
+    if not os.path.exists(PROFILES_CSV):
+        print("❌ No student profiles found.")
+        return
+    
+    if not os.path.exists(CSV_FILE):
+        print("❌ No attendance records found.")
+        return
+    
+    # Get all students from profiles
+    all_students = {}
+    try:
+        with open(PROFILES_CSV, mode='r', newline='') as pf:
+            reader = csv.DictReader(pf)
+            for row in reader:
+                name = row.get('Name', '').upper().strip()
+                roll = row.get('Roll', '').strip()
+                mobile = row.get('Mobile', '').strip()
+                if name:
+                    all_students[name] = {'roll': roll, 'mobile': mobile}
+    except Exception as ex:
+        print(f"❌ Error reading profiles: {ex}")
+        return
+    
+    # Get today's date or ask for date
+    print("\nSelect date for absence check:")
+    print("1️⃣  Today")
+    print("2️⃣  Enter specific date (YYYY-MM-DD)")
+    date_choice = input("Enter choice (1-2): ").strip()
+    
+    if date_choice == '1':
+        check_date = datetime.now().strftime("%Y-%m-%d")
+    elif date_choice == '2':
+        check_date = input("Enter date (YYYY-MM-DD): ").strip()
+    else:
+        check_date = datetime.now().strftime("%Y-%m-%d")
+    
+    # Find students marked present on that date
+    present_on_date = set()
+    try:
+        with open(CSV_FILE, mode='r', newline='') as file:
+            reader = csv.DictReader(file)
+            for row in reader:
+                name = row.get('Name', '').upper().strip()
+                date_val = row.get('Date', '').strip()
+                status = row.get('Status', '').strip()
+                
+                if date_val == check_date and status == 'PRESENT' and name:
+                    present_on_date.add(name)
+    except Exception as ex:
+        print(f"❌ Error reading attendance: {ex}")
+        return
+    
+    # Find absent students
+    absent_students = {}
+    for name, info in all_students.items():
+        if name not in present_on_date:
+            absent_students[name] = info
+    
+    if not absent_students:
+        print(f"\n✅ Great! No students absent on {check_date}")
+        return
+    
+    print(f"\n📋 Absent students on {check_date}: {len(absent_students)}")
+    for name, info in absent_students.items():
+        roll = info['roll'] or 'N/A'
+        print(f"   • {name} (Roll: {roll})")
+    
+    confirm = input("\n⚠️ Send absence reason request to ALL absent students? (yes/no): ").strip().lower()
+    if confirm != 'yes':
+        print("❌ Message sending canceled.")
+        return
+    
+    print("\n📤 Sending messages to absent students...")
+    success_count = 0
+    failed_count = 0
+    
+    for name, info in absent_students.items():
+        mobile = info['mobile']
+        roll = info['roll'] or 'N/A'
+        
+        if not mobile:
+            print(f"⏩ Skipped {name}: No phone number on file.")
+            # Save absent record anyway
+            save_absent_record(name, roll, '', check_date)
+            failed_count += 1
+            continue
+        
+        message_text = f"Dear {name} (Roll: {roll}), you were marked ABSENT on {check_date}. Please reply with the reason for your absence. Thank you!"
+        
+        if send_sms_message(name, mobile, message_text):
+            save_absent_record(name, roll, mobile, check_date)
+            success_count += 1
+        else:
+            save_absent_record(name, roll, mobile, check_date)
+            failed_count += 1
+    
+    print(f"\n✅ Absence notification complete: {success_count} sent, {failed_count} skipped")
+    
+    # Option to manually record reasons
+    print("\n📝 Would you like to manually record absence reasons? (yes/no): ", end='')
+    manual_choice = input().strip().lower()
+    if manual_choice == 'yes':
+        record_absence_reasons(absent_students, check_date)
+
+
+def record_absence_reasons(absent_students, date_val):
+    """Manually record absence reasons for students."""
+    print("\n" + "="*60)
+    print("📝 RECORD ABSENCE REASONS")
+    print("="*60)
+    
+    absent_list = list(absent_students.items())
+    
+    for idx, (name, info) in enumerate(absent_list, 1):
+        roll = info['roll'] or 'N/A'
+        print(f"\n{idx}. {name} (Roll: {roll})")
+        reason = input("   Enter reason for absence (or press Enter to skip): ").strip()
+        
+        if reason:
+            save_absent_reason(name, roll, date_val, reason)
+        else:
+            print(f"   ⏭️ Skipped reason for {name}")
+    
+    print("\n✅ Absence reason recording complete!")
+
+
+def get_absence_statistics_by_day():
+    """Calculate and display absence statistics by day."""
+    print("\n" + "="*60)
+    print("📊 ABSENCE STATISTICS BY DAY")
+    print("="*60)
+    
+    if not os.path.exists(CSV_FILE) or not os.path.exists(PROFILES_CSV):
+        print("❌ No records found.")
+        return
+    
+    # Count total students
+    total_students = 0
+    try:
+        with open(PROFILES_CSV, mode='r', newline='') as pf:
+            reader = csv.DictReader(pf)
+            total_students = sum(1 for row in reader)
+    except:
+        pass
+    
+    if total_students == 0:
+        print("❌ No students enrolled.")
+        return
+    
+    # Calculate daily statistics
+    day_stats = {}
+    try:
+        with open(CSV_FILE, mode='r', newline='') as file:
+            reader = csv.DictReader(file)
+            for row in reader:
+                date_val = row.get('Date', '').strip()
+                status = row.get('Status', '').strip()
+                
+                if date_val and status == 'PRESENT':
+                    if date_val not in day_stats:
+                        day_stats[date_val] = {'present': 0, 'absent': 0}
+                    day_stats[date_val]['present'] += 1
+    except Exception as ex:
+        print(f"❌ Error reading records: {ex}")
+        return
+    
+    # Calculate absent counts
+    for date_val in day_stats:
+        day_stats[date_val]['absent'] = total_students - day_stats[date_val]['present']
+    
+    if not day_stats:
+        print("❌ No attendance data available.")
+        return
+    
+    # Display statistics
+    print(f"\n📋 Total Students Enrolled: {total_students}\n")
+    print(f"{'Date':<15} {'Present':<12} {'Absent':<12} {'Absent %':<12}")
+    print("-" * 51)
+    
+    for date_val in sorted(day_stats.keys()):
+        present = day_stats[date_val]['present']
+        absent = day_stats[date_val]['absent']
+        absent_percent = (absent / total_students * 100) if total_students > 0 else 0
+        print(f"{date_val:<15} {present:<12} {absent:<12} {absent_percent:>10.2f}%")
+    
+    # Overall statistics
+    total_present = sum(stats['present'] for stats in day_stats.values())
+    total_absent = sum(stats['absent'] for stats in day_stats.values())
+    total_records = total_present + total_absent
+    overall_absent_percent = (total_absent / total_records * 100) if total_records > 0 else 0
+    
+    print("-" * 51)
+    print(f"{'TOTAL':<15} {total_present:<12} {total_absent:<12} {overall_absent_percent:>10.2f}%")
+    
+    return day_stats
+
+
+def view_absence_statistics():
+    """View absence statistics and reasons."""
+    print("\n" + "="*60)
+    print("📊 VIEW ABSENCE INFORMATION")
+    print("="*60)
+    print("1️⃣  Show daily absence statistics")
+    print("2️⃣  Show absence reasons recorded")
+    print("3️⃣  Back to main menu")
+    print("="*60)
+    
+    choice = input("Enter option (1-3): ").strip()
+    
+    if choice == '1':
+        get_absence_statistics_by_day()
+    elif choice == '2':
+        view_absence_reasons()
+    elif choice == '3':
+        return
+    else:
+        print("❌ Invalid option.")
+
+
+def view_absence_reasons():
+    """View all recorded absence reasons."""
+    print("\n" + "="*60)
+    print("📝 ABSENCE REASONS RECORDED")
+    print("="*60)
+    
+    if not os.path.exists(ABSENT_REASONS_FILE):
+        print("❌ No absence reasons recorded yet.")
+        return
+    
+    try:
+        with open(ABSENT_REASONS_FILE, mode='r', newline='') as rf:
+            reader = csv.DictReader(rf)
+            reasons_list = list(reader)
+    except Exception as ex:
+        print(f"❌ Error reading reasons: {ex}")
+        return
+    
+    if len(reasons_list) <= 0:
+        print("❌ No absence reasons recorded yet.")
+        return
+    
+    print(f"\n📋 Total absence reasons recorded: {len(reasons_list)}\n")
+    print(f"{'Name':<20} {'Roll':<12} {'Date':<15} {'Reason':<40}")
+    print("-" * 87)
+    
+    for entry in reasons_list:
+        name = entry.get('Name', 'N/A')[:20]
+        roll = entry.get('Roll', 'N/A')[:12]
+        date_val = entry.get('Date', 'N/A')[:15]
+        reason = entry.get('Reason', 'N/A')[:40]
+        print(f"{name:<20} {roll:<12} {date_val:<15} {reason:<40}")
+
+
+def send_absence_reason_to_students():
+    """Send recorded absence reasons back to students via SMS."""
+    print("\n" + "="*60)
+    print("📲 SEND ABSENCE REASONS TO STUDENTS")
+    print("="*60)
+    
+    if not os.path.exists(ABSENT_REASONS_FILE):
+        print("❌ No absence reasons recorded yet.")
+        return
+    
+    # Load student profiles for phone numbers
+    profiles_dict = {}
+    try:
+        with open(PROFILES_CSV, mode='r', newline='') as pf:
+            reader = csv.DictReader(pf)
+            for row in reader:
+                name = row.get('Name', '').upper().strip()
+                roll = row.get('Roll', '').strip()
+                mobile = row.get('Mobile', '').strip()
+                profiles_dict[name] = {'roll': roll, 'mobile': mobile}
+    except Exception as ex:
+        print(f"❌ Error reading profiles: {ex}")
+        return
+    
+    # Read all recorded absence reasons
+    try:
+        with open(ABSENT_REASONS_FILE, mode='r', newline='') as rf:
+            reader = csv.DictReader(rf)
+            reasons_list = list(reader)
+    except Exception as ex:
+        print(f"❌ Error reading reasons: {ex}")
+        return
+    
+    if len(reasons_list) <= 0:
+        print("❌ No absence reasons recorded yet.")
+        return
+    
+    print(f"\n📋 Total reasons to send: {len(reasons_list)}\n")
+    
+    # Display reasons to send
+    for idx, entry in enumerate(reasons_list, 1):
+        name = entry.get('Name', 'N/A')
+        date_val = entry.get('Date', 'N/A')
+        reason = entry.get('Reason', 'N/A')
+        print(f"{idx}. {name} ({date_val}): {reason}")
+    
+    confirm = input("\n⚠️ Send all recorded reasons to students' phones? (yes/no): ").strip().lower()
+    if confirm != 'yes':
+        print("❌ Message sending canceled.")
+        return
+    
+    print("\n📤 Sending absence reasons to students...")
+    success_count = 0
+    failed_count = 0
+    
+    for entry in reasons_list:
+        name = entry.get('Name', '').upper().strip()
+        roll = entry.get('Roll', '').strip()
+        date_val = entry.get('Date', '').strip()
+        reason = entry.get('Reason', '').strip()
+        
+        # Get mobile number from profiles
+        if name not in profiles_dict:
+            print(f"⏩ Skipped {name}: Profile not found.")
+            failed_count += 1
+            continue
+        
+        mobile = profiles_dict[name]['mobile']
+        
+        if not mobile:
+            print(f"⏩ Skipped {name}: No phone number on file.")
+            failed_count += 1
+            continue
+        
+        # Construct message with recorded reason
+        message_text = f"Dear {name}, Your absence reason for {date_val} has been recorded: '{reason}'. Thank you for your response."
+        
+        if send_sms_message(name, mobile, message_text):
+            success_count += 1
+        else:
+            failed_count += 1
+    
+    print(f"\n✅ Absence reason notification complete: {success_count} sent, {failed_count} failed")
+
+
+def send_whatsapp_message_to_student():
+    """Send a WhatsApp message to a specific student."""
+    print("\n" + "="*60)
+    print("💬 SEND WHATSAPP MESSAGE TO STUDENT")
+    print("="*60)
+    
+    if not os.path.exists(PROFILES_CSV):
+        print("❌ No profiles found.")
+        return
+    
+    # Load all profiles
+    profiles_list = []
+    try:
+        with open(PROFILES_CSV, mode='r', newline='') as pf:
+            reader = csv.DictReader(pf)
+            profiles_list = list(reader)
+    except Exception as ex:
+        print(f"❌ Error reading profiles: {ex}")
+        return
+    
+    if not profiles_list:
+        print("❌ No profiles found.")
+        return
+    
+    # Display all profiles
+    print("\n🔍 Available Students:")
+    for idx, profile in enumerate(profiles_list, 1):
+        name = profile.get('Name', 'N/A')
+        roll = profile.get('Roll', 'N/A')
+        mobile = profile.get('Mobile', 'N/A') or 'No Phone'
+        print(f"   {idx}. {name} ({roll}) - {mobile}")
+    
+    try:
+        choice = input(f"\n📌 Enter student number (1-{len(profiles_list)}) to message: ").strip()
+        idx = int(choice) - 1
+        
+        if idx < 0 or idx >= len(profiles_list):
+            print("❌ Invalid selection.")
+            return
+        
+        selected = profiles_list[idx]
+        name = selected.get('Name', '').upper()
+        mobile = selected.get('Mobile', '')
+        
+        print(f"\n✏️ WhatsApp message to: {name}")
+        message_text = input("📝 Enter message (max 160 characters recommended): ").strip()
+        
+        if not message_text:
+            print("⏭️ Message not sent (empty).")
+            return
+        
+        send_whatsapp_message(name, mobile, message_text)
+        
+    except ValueError:
+        print("❌ Invalid input.")
+    except Exception as ex:
+        print(f"❌ Error: {ex}")
+
+
+def send_whatsapp_broadcast():
+    """Send a WhatsApp message to all enrolled students."""
+    print("\n" + "="*60)
+    print("📢 BROADCAST WHATSAPP MESSAGE TO ALL STUDENTS")
+    print("="*60)
+    
+    if not os.path.exists(PROFILES_CSV):
+        print("❌ No profiles found.")
+        return
+    
+    # Load all profiles
+    profiles_list = []
+    try:
+        with open(PROFILES_CSV, mode='r', newline='') as pf:
+            reader = csv.DictReader(pf)
+            profiles_list = list(reader)
+    except Exception as ex:
+        print(f"❌ Error reading profiles: {ex}")
+        return
+    
+    if not profiles_list:
+        print("❌ No profiles found.")
+        return
+    
+    print(f"\n📋 Total students: {len(profiles_list)}")
+    for idx, profile in enumerate(profiles_list, 1):
+        name = profile.get('Name', 'N/A')
+        mobile = profile.get('Mobile', '') or 'No Phone'
+        print(f"   {idx}. {name} - {mobile}")
+    
+    confirm = input("\n⚠️ Send WhatsApp message to ALL students? (yes/no): ").strip().lower()
+    if confirm != 'yes':
+        print("❌ Broadcast canceled.")
+        return
+    
+    message_text = input("\n📝 Enter message (max 160 characters recommended): ").strip()
+    if not message_text:
+        print("⏭️ Broadcast not sent (empty message).")
+        return
+    
+    print("\n📤 Sending WhatsApp broadcast messages...")
+    success_count = 0
+    failed_count = 0
+    
+    for profile in profiles_list:
+        name = profile.get('Name', '').upper()
+        mobile = profile.get('Mobile', '')
+        if send_whatsapp_message(name, mobile, message_text):
+            success_count += 1
+        else:
+            failed_count += 1
+    
+    print(f"\n✅ WhatsApp Broadcast complete: {success_count} sent, {failed_count} failed")
+
+
+def view_message_log():
+    """View all sent messages."""
+    print("\n" + "="*60)
+    print("📜 MESSAGE LOG")
+    print("="*60)
+    
+    if not os.path.exists(MESSAGE_LOG_FILE):
+        print("❌ No message log found yet.")
+        return
+    
+    try:
+        with open(MESSAGE_LOG_FILE, 'r', encoding='utf-8') as log_file:
+            messages = log_file.readlines()
+        
+        if not messages:
+            print("❌ Message log is empty.")
+            return
+        
+        print(f"\n📋 Total messages: {len(messages)}\n")
+        # Show last 20 messages
+        for msg in messages[-20:]:
+            print(msg.rstrip())
+        
+        if len(messages) > 20:
+            print(f"\n... ({len(messages) - 20} more messages) ...")
+    except Exception as ex:
+        print(f"❌ Error reading message log: {ex}")
+
+
+def messaging_menu():
+    """Main messaging menu."""
+    while True:
+        print("\n" + "="*60)
+        print("📨 MESSAGING SYSTEM")
+        print("="*60)
+        print("1️⃣  Send SMS to a student")
+        print("2️⃣  Send SMS broadcast to all students")
+        print("3️⃣  Send message to all PRESENT students")
+        print("4️⃣  Send message to ABSENT students (ask for reason)")
+        print("5️⃣  Send absence reasons to students (confirmation)")
+        print("6️⃣  Send WhatsApp to a student")
+        print("7️⃣  Send WhatsApp broadcast to all students")
+        print("8️⃣  View message log")
+        print("9️⃣  View absence statistics")
+        print("🔟  Back to main menu")
+        print("="*60)
+        
+        choice = input("Enter option (1-10): ").strip()
+        
+        if choice == '1':
+            send_message_to_student()
+        elif choice == '2':
+            send_broadcast_message()
+        elif choice == '3':
+            send_message_to_present_students()
+        elif choice == '4':
+            send_message_to_absent_students()
+        elif choice == '5':
+            send_absence_reason_to_students()
+        elif choice == '6':
+            send_whatsapp_message_to_student()
+        elif choice == '7':
+            send_whatsapp_broadcast()
+        elif choice == '8':
+            view_message_log()
+        elif choice == '9':
+            view_absence_statistics()
+        elif choice == '10':
+            break
+        else:
+            print("❌ Invalid option. Try again.")
+
+
+def match_face(face_roi_gray, known_profiles):
+    """Match a detected face with known profiles and return match info."""
+    best_match = None
+    highest_similarity = 0
+    saved_roll_in_match = ''
+    saved_mobile_in_match = ''
+
+    for name, data in known_profiles.items():
+        try:
+            saved_face_roi = data[0]
+            saved_roll = data[1] if len(data) > 1 else ''
+            saved_mobile = data[2] if len(data) > 2 else ''
+            
+            # Resize to standard matching metrics dimensions
+            resized_live = cv2.resize(face_roi_gray, (100, 100))
+            resized_saved = cv2.resize(saved_face_roi, (100, 100))
+            
+            # Check pixel correlation matrix similarity matching
+            match_score = cv2.matchTemplate(resized_live, resized_saved, cv2.TM_CCOEFF_NORMED)[0][0]
+            if match_score > highest_similarity and match_score > 0.45:
+                highest_similarity = match_score
+                best_match = name
+                saved_roll_in_match = saved_roll
+                saved_mobile_in_match = saved_mobile
+        except:
+            pass
+    
+    return best_match, saved_roll_in_match, saved_mobile_in_match
+
+
+# Initial load of user profiles
+known_profiles = load_known_faces()
+logged_users = set()  # Tracks who was logged present in the current session
+
+# 2. Fire up the Live Hardware Interface
+webcam = cv2.VideoCapture(0)
+
+print("\n==========================================================")
+print("📷 SYSTEM ACTIVE: Look at the camera.")
+print("👉 Press 'E' to ENROLL and save details for a new face.")
+print("👉 Press 'C' to open camera and take a photo to enroll manually.")
+print("👉 Press 'P' to UPDATE PHONE NUMBERS.")
+print("👉 Press 'M' to ACCESS MESSAGING SYSTEM.")
+print("👉 Press 'O' to MANAGE ACTIVE PROJECTS.")
+print("👉 Press 'Q' inside the camera window to QUIT.")
+print("==========================================================\n")
+
+while True:
+    ret, frame = webcam.read()
+    if not ret:
+        break
+
+    gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    detected_faces = face_cascade.detectMultiScale(gray_frame, scaleFactor=1.3, minNeighbors=5)
+
+    # Display active project on screen if one is active
+    active_proj = get_active_project()
+    if active_proj:
+        cv2.putText(frame, f"🎯 ACTIVE PROJECT: {active_proj}", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+
+    # Render interactive HUD menus on screen space canvas
+    cv2.putText(frame, "Press 'E' Enroll | 'C' Capture | 'P' Phone | 'M' Messages | 'O' Projects | 'Q' Quit", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+
+    # Collect per-frame detection info for interactive actions
+    detected_info = []
+    for idx, (x, y, w, h) in enumerate(detected_faces):
+        face_roi_gray = gray_frame[y:y+h, x:x+w]
+        face_roi_color = frame[y:y+h, x:x+w]
+        
+        name_status = "ABSENT / UNKNOWN"
+        box_color = (0, 0, 255)  # Red box for Absent/Unknown
+
+        # Compare current live face matrix with saved database profiles
+        best_match, saved_roll_in_match, saved_mobile_in_match = match_face(face_roi_gray, known_profiles)
+
+        # If matching target calculations pass the confidence matrix threshold
+        if best_match:
+            name_status = f"{best_match}: PRESENT"
+            box_color = (0, 255, 0)  # Green box for Present
+            
+            # Log structural data timestamp details to spreadsheet automatically
+            if best_match not in logged_users:
+                # fetch roll and mobile if available
+                roll_val = saved_roll_in_match or ''
+                mobile_val = saved_mobile_in_match or ''
+                save_present_log(best_match, roll_val, mobile_val)
+                play_presence_sound()
+                if roll_val:
+                    speak_text(f"Present, {best_match}. Roll number {roll_val}")
+                else:
+                    speak_text(f"Present, {best_match}")
+                logged_users.add(best_match)
+            # Draw structural overlay wrappers and index for multi-face
+            cv2.rectangle(frame, (x, y), (x + w, y + h), box_color, 3)
+            cv2.putText(frame, name_status, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, box_color, 2)
+            cv2.putText(frame, f"#{idx}", (x + w - 25, y + h - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
+
+            detected_info.append({
+                'idx': idx,
+                'bbox': (x, y, w, h),
+                'best_match': best_match,
+                'roll': saved_roll_in_match if best_match else '',
+                'mobile': saved_mobile_in_match if best_match else '',
+                'roi_color': face_roi_color,
+                'roi_gray': face_roi_gray
+            })
+        else:
+            # Unknown face: draw red box, show status and index, still append for interaction
+            cv2.rectangle(frame, (x, y), (x + w, y + h), box_color, 3)
+            cv2.putText(frame, name_status, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, box_color, 2)
+            cv2.putText(frame, f"#{idx}", (x + w - 25, y + h - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
+            detected_info.append({
+                'idx': idx,
+                'bbox': (x, y, w, h),
+                'best_match': None,
+                'roll': '',
+                'mobile': '',
+                'roi_color': face_roi_color,
+                'roi_gray': face_roi_gray
+            })
+
+    cv2.imshow('Interactive Enrollment & Attendance System', frame)
+    key = cv2.waitKey(1) & 0xFF
+
+    # Keyboard State Handlers
+    if key == ord('e'):
+        # Enroll a face: if single face, use it; if multiple, ask for index
+        if len(detected_info) == 0:
+            print("❌ No face detected to enroll.\n")
+        else:
+            chosen = 0
+            if len(detected_info) > 1:
+                print(f"Multiple faces detected ({len(detected_info)}). See indexes on boxes.")
+                try:
+                    choice = input(f"Enter index to enroll (0-{len(detected_info)-1}): ").strip()
+                    chosen = int(choice)
+                except Exception:
+                    print("Invalid index entry. Enrollment canceled.")
+                    chosen = None
+            if chosen is not None:
+                if chosen is None or chosen < 0 or chosen >= len(detected_info):
+                    print("Invalid selection. Enrollment canceled.")
+                else:
+                    fx, fy, fw, fh = detected_info[chosen]['bbox']
+                    enroll_face = frame[fy:fy+fh, fx:fx+fw]
+                    print("\n📸 ENROLLING FACE: Look at your background shell window!")
+                    new_name = input("✍️ Enter the name for this person: ").strip().upper()
+                    new_roll = input("🔢 Enter roll number (optional): ").strip().upper()
+                    new_mobile = input("📱 Enter mobile number (with country code, e.g., +9198765...): ").strip()
+                    if not new_name:
+                        print("❌ Enrollment canceled: Name cannot be left blank.\n")
+                    else:
+                        filename = os.path.join(DB_DIR, f"{new_name}.jpg")
+                        # avoid overwrite unless confirmed
+                        if os.path.exists(filename):
+                            resp = input(f"Profile {new_name} exists. Overwrite? (y/N): ").strip().lower()
+                            if resp != 'y':
+                                print("Skipped saving to avoid overwrite.\n")
+                            else:
+                                cv2.imwrite(filename, enroll_face)
+                        else:
+                            cv2.imwrite(filename, enroll_face)
+                        try:
+                            with open(PROFILES_CSV, mode='a', newline='') as pf:
+                                pw = csv.writer(pf)
+                                pw.writerow([new_name, new_roll, new_mobile, os.path.basename(filename)])
+                        except Exception as ex:
+                            print(f"⚠️ Warning: failed to write profile metadata: {ex}")
+                        print(f"💾 File saved successfully! Added {new_name} ({new_roll}) to database.\n")
+                        known_profiles = load_known_faces()
+
+    elif key == ord('q'):
+        break
+    elif key == ord('c'):
+        # Temporarily release main webcam, run manual capture flow, then re-open
+        webcam.release()
+        saved = manual_capture()
+        # reload profiles if a new file was saved
+        known_profiles = load_known_faces()
+        webcam = cv2.VideoCapture(0)
+    elif key == ord('p') or key == ord('P'):
+        # Update phone number for existing profile
+        webcam.release()
+        update_phone_number()
+        known_profiles = load_known_faces()
+        webcam = cv2.VideoCapture(0)
+    elif key == ord('m') or key == ord('M'):
+        # Open messaging system
+        webcam.release()
+        messaging_menu()
+        known_profiles = load_known_faces()
+        webcam = cv2.VideoCapture(0)
+    elif key == ord('o') or key == ord('O'):
+        # Open project management system
+        webcam.release()
+        project_management_menu()
+        known_profiles = load_known_faces()
+        webcam = cv2.VideoCapture(0)
+    elif key == ord('v'):
+        # View details for a detected face: choose index if multiple
+        if len(detected_info) == 0:
+            print("No face detected to view details.")
+        else:
+            chosen = 0
+            if len(detected_info) > 1:
+                try:
+                    choice = input(f"Enter index to view (0-{len(detected_info)-1}): ").strip()
+                    chosen = int(choice)
+                except Exception:
+                    print("Invalid index. Cancelled.")
+                    chosen = None
+            if chosen is not None:
+                info = detected_info[chosen]
+                if info['best_match']:
+                    rollval = info['roll']
+                    mobileval = info['mobile']
+                    print(f"Profile: {info['best_match']}, Roll: {rollval}, Mobile: {mobileval}")
+                else:
+                    print("Face not recognized. Press 'E' to enroll this person.")
+
+webcam.release()
+cv2.destroyAllWindows()
